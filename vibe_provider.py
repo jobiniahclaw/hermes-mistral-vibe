@@ -228,6 +228,36 @@ class _StreamResult:
         return self._client._async_create(**self._kwargs).__await__()
 
 
+def _affinity_id(messages):
+    """Stable per-conversation id: hash of the first system and first user message."""
+    import hashlib, json
+    if not isinstance(messages, list):
+        return None
+    first = {}
+    for m in messages:
+        role = m.get('role') if isinstance(m, dict) else None
+        if role in ('system', 'user') and role not in first:
+            first[role] = m.get('content')
+        if len(first) == 2:
+            break
+    if not first:
+        return None
+    raw = json.dumps(first, sort_keys=True, ensure_ascii=False, default=str)
+    return 'hermes-' + hashlib.sha256(raw.encode('utf-8')).hexdigest()[:32]
+
+
+def _with_affinity(kwargs):
+    """Add the per-conversation ``x-affinity`` header, as the official Vibe client
+    does, merged into any headers already present (never replacing them)."""
+    affinity = _affinity_id(kwargs.get('messages'))
+    if affinity:
+        headers = {k: v for k, v in dict(kwargs.get('extra_headers') or {}).items()
+                   if str(k).lower() != 'x-affinity'}
+        headers['x-affinity'] = affinity
+        kwargs['extra_headers'] = headers
+    return kwargs
+
+
 class GuardedClient:
     """Validation is deferred: Hermes swallows create_client hook exceptions."""
     # Preserve this guard instead of rebuilding an unguarded AsyncOpenAI client.
@@ -237,6 +267,20 @@ class GuardedClient:
         from types import SimpleNamespace
         self.kwargs = kwargs
         self.chat = SimpleNamespace(completions=self)
+
+    # Hermes reads these OpenAI-client attributes when it binds a fallback
+    # route (agent/route_binding.py, agent/client_lifecycle.py). Without them a
+    # fallback *to* mistral-vibe aborts half-way: the agent is already marked
+    # mistral-vibe but keeps the previous route's extra_body, and every retry
+    # fails with "Provider restricted to its fixed origin and request headers".
+    @property
+    def base_url(self):
+        return str(self.kwargs.get('base_url') or BASE)
+
+    @property
+    def api_key(self):
+        # Placeholder only: _create always re-reads the dedicated key.
+        return self.kwargs.get('api_key') or ''
 
     def create(self, **kwargs):
         import asyncio
@@ -297,6 +341,7 @@ class GuardedClient:
                 http_client=httpx.Client(transport=httpx.HTTPTransport(),
                     follow_redirects=False, trust_env=False, timeout=60))
             self._client_key_fingerprint = key_fingerprint
+        _with_affinity(kwargs)
         return self._client.chat.completions.create(**kwargs)
 
     def close(self):
