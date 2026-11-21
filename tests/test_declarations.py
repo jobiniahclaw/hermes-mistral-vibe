@@ -14,8 +14,7 @@ sys.path.insert(0, str(ROOT))
 import vibe_provider as vp
 
 VERIFIED = vp._REASONING_MODEL_IDS
-UNDECLARED = ('mistral-medium-3.5', 'mistral-vibe-cli-latest', 'mistral-large-latest',
-              'mistral-small-latest', 'codestral-latest', 'magistral-medium-latest')
+UNDECLARED = ('mistral-large-latest', 'codestral-latest')  # pr6 declared the high-only families
 CONFIGS = [None, {'enabled': False}] + [{'enabled': True, 'effort': effort} for effort in
     ('minimal', 'low', 'medium', 'high', 'xhigh', 'max')]
 
